@@ -11,9 +11,7 @@ async function notion(path: string, init?: RequestInit) {
     },
     cache: "no-store",
   });
-  if (!res.ok) {
-    throw new Error(`Notion ${res.status}: ${await res.text()}`);
-  }
+  if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -29,7 +27,7 @@ export const createPage = (db: string, properties: unknown) =>
     body: JSON.stringify({ parent: { database_id: db }, properties }),
   });
 
-/* Notion property readers. These shapes are fiddly — keep them in one place. */
+/* ---------- readers ---------- */
 export const num = (p: any): number | null => p?.number ?? null;
 export const txt = (p: any): string =>
   p?.rich_text?.map((t: any) => t.plain_text).join("") ?? "";
@@ -39,41 +37,46 @@ export const sel = (p: any): string | null => p?.select?.name ?? null;
 export const multi = (p: any): string[] =>
   p?.multi_select?.map((s: any) => s.name) ?? [];
 export const check = (p: any): boolean => p?.checkbox ?? false;
+export const dat = (p: any): string | null => p?.date?.start ?? null;
+export const formula = (p: any): string => {
+  const f = p?.formula;
+  if (!f) return "";
+  if (f.type === "string") return f.string ?? "";
+  if (f.type === "number") return f.number != null ? String(f.number) : "";
+  if (f.type === "boolean") return f.boolean ? "yes" : "no";
+  if (f.type === "date") return f.date?.start ?? "";
+  return "";
+};
 export const roll = (p: any): string => {
   const arr = p?.rollup?.array ?? [];
   return arr
-    .map((a: any) => (a?.type === "rich_text" ? txt(a) : a?.type === "title" ? title(a) : ""))
+    .map((a: any) =>
+      a?.type === "rich_text" ? txt(a) : a?.type === "title" ? title(a) : ""
+    )
     .filter(Boolean)
     .join(" · ");
 };
 
-/* Local date, not UTC — a 23:30 gym session must not land on tomorrow. */
-export function today(): string {
-  const d = new Date();
-  const off = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - off).toISOString().slice(0, 10);
-}
+/* ---------- writers ---------- */
+const has = (v: any) => v !== null && v !== undefined && v !== "";
+export const wNum = (v: any) => (has(v) ? { number: Number(v) } : { number: null });
+export const wTxt = (v: any) => ({
+  rich_text: has(v) ? [{ text: { content: String(v).slice(0, 2000) } }] : [],
+});
+export const wCheck = (v: any) => ({ checkbox: !!v });
+export const wSel = (v: any) => (has(v) ? { select: { name: v } } : { select: null });
+export const wMulti = (v: any) => ({
+  multi_select: Array.isArray(v) ? v.map((n: string) => ({ name: n })) : [],
+});
+export const wDate = (v: any) => (has(v) ? { date: { start: v } } : { date: null });
 
-export function daysAgo(n: number): string {
-  const d = new Date(Date.now() - n * 86400000);
-  const off = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - off).toISOString().slice(0, 10);
+/* Local date, not UTC — a 23:30 session must not land on tomorrow. */
+export function localDate(d = new Date()): string {
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 10);
 }
-
-export type Exercise = {
-  id: string;
-  name: string;
-  variation: string[];
-  order: number | null;
-  target: string;
-  recWeight: number | null;
-  rest: string;
-  warmup: string | null;
-  markerLift: boolean;
-  coachNote: string;
-  cueText: string;
-  lastWeight: number | null;
-  lastReps: string;
-  weight: number | null;
-  reps: string;
-};
+export const today = () => localDate();
+export const shiftDate = (iso: string, days: number) =>
+  localDate(new Date(new Date(iso + "T12:00:00").getTime() + days * 86400000));
+export const daysBefore = (iso: string, n: number) => shiftDate(iso, -n);

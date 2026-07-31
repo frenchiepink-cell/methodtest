@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import {
-  queryDb, updatePage, num, txt, title, sel, multi, check, roll, today, daysAgo,
+  queryDb, updatePage, num, txt, title, sel, multi, check, roll, today, daysBefore,
 } from "@/lib/notion";
 
 const DB = process.env.NOTION_TRAINING_DB!;
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const d = today();
+    const d = new URL(req.url).searchParams.get("date") || today();
 
     const todayRows = await queryDb(DB, {
       filter: { property: "Session Date", date: { equals: d } },
@@ -26,7 +26,7 @@ export async function GET() {
       filter: {
         and: [
           { property: "Day", select: { equals: day } },
-          { property: "Session Date", date: { on_or_after: daysAgo(60) } },
+          { property: "Session Date", date: { on_or_after: daysBefore(d, 60) } },
           { property: "Session Date", date: { before: d } },
         ],
       },

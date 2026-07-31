@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 type Ex = {
   id: string;
@@ -22,8 +23,18 @@ type Ex = {
 
 type Entry = { weight: string; reps: string; note: string };
 
-export default function Session() {
+export default function Page() {
+  return (
+    <Suspense fallback={<p className="p-6 text-zinc-500">Loading…</p>}>
+      <Session />
+    </Suspense>
+  );
+}
+
+function Session() {
   const router = useRouter();
+  const params = useSearchParams();
+  const date = params.get("date") || "";
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [day, setDay] = useState<string | null>(null);
@@ -33,7 +44,7 @@ export default function Session() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch("/api/session")
+    fetch(`/api/session${date ? `?date=${date}` : ""}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.error) throw new Error(j.error);
