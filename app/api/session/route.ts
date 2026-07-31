@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  queryDb, updatePage, num, txt, title, sel, multi, check, roll, today, daysBefore,
+  queryDb, updatePage, num, txt, title, sel, multi, check, roll, today, daysBefore, wMulti,
 } from "@/lib/notion";
 
 const DB = process.env.NOTION_TRAINING_DB!;
@@ -52,6 +52,19 @@ export async function GET(req: Request) {
         variation: multi(r.properties["Machine / variation"]),
         order: num(r.properties["Order"]),
         target: txt(r.properties["Target"]),
+        recReps: (() => {
+          const explicit = txt(r.properties["Rec reps"]);
+          if (explicit) return explicit;
+          /* Target doubles as a coaching note — take the bit before the first
+             em-dash or middot, e.g. "10/9/9/9 — MARKER · hold 20" -> "10/9/9/9" */
+          return txt(r.properties["Target"]).split(/[—·]/)[0].trim();
+        })(),
+        targetNote: (() => {
+          if (txt(r.properties["Rec reps"])) return txt(r.properties["Target"]);
+          const t = txt(r.properties["Target"]);
+          const i = t.search(/[—·]/);
+          return i === -1 ? "" : t.slice(i + 1).trim();
+        })(),
         recWeight: num(r.properties["Rec weight (kg)"]),
         rest: txt(r.properties["Rest"]),
         warmup: sel(r.properties["Warm-up"]),
@@ -62,6 +75,7 @@ export async function GET(req: Request) {
         lastReps: last[name]?.reps ?? "",
         weight: num(r.properties["Weight (kg)"]),
         reps: txt(r.properties["Reps Done"]),
+        rir: txt(r.properties["RIR"]),
       };
     });
 
@@ -78,16 +92,52 @@ export async function POST(req: Request) {
 
     /* Sequential with a gap. Notion allows roughly 3 requests a second. */
     for (const e of entries ?? []) {
-      const hasWeight = e.weight !== null && e.weight !== undefined && e.weight !== "";
-      const hasReps = typeof e.reps === "string" && e.reps.trim() !== "";
-      const hasNote = typeof e.note === "string" && e.note.trim() !== "";
-      if (!hasWeight && !hasReps && !hasNote) continue;
-
       const props: any = {};
-      if (hasWeight) props["Weight (kg)"] = { number: Number(e.weight) };
-      if (hasReps) props["Reps Done"] = { rich_text: [{ text: { content: e.reps } }] };
-      if (hasNote)
+
+      /* Per-set entry collapsed into the two fields Notion has.
+         All sets at one weight -> "12,10,9" (matches existing history).
+         Weight varied         -> "20x12, 18x10, 18x9".
+         Weight (kg) always gets the heaviest working set, so progression
+         comparisons against Rec weight still work. */
+      const sets = (e.sets ?? []).filter(
+        (s: any) =>
+          String(s.weight ?? "").trim() !== "" ||
+          String(s.reps ?? "").trim() !== "" ||
+          String(s.rir ?? "").trim() !== ""
+      );
+      if (sets.length) {
+        const ws = sets
+          .map((s: any) => Number(s.weight))
+          .filter((n: number) => Number.isFinite(n));
+        const uniform = ws.length > 0 && new Set(ws).size === 1;
+        const line = uniform
+          ? sets.map((s: any) => s.reps).filter(Boolean).join(",")
+          : sets
+              .map((s: any) => {
+                const w = String(s.weight ?? "").trim();
+                const r = String(s.reps ?? "").trim();
+                return w && r ? `${w}x${r}` : w || r;
+              })
+              .filter(Boolean)
+              .join(", ");
+        if (line) props["Reps Done"] = { rich_text: [{ text: { content: line } }] };
+        if (ws.length) props["Weight (kg)"] = { number: Math.max(...ws) };
+
+        /* RIR is reported per set, one value each, e.g. "1/1/2". */
+        const rirLine = sets
+          .map((s: any) => String(s.rir ?? "").trim())
+          .join("/")
+          .replace(/^\/+|\/+$/g, "");
+        if (rirLine.replace(/\//g, "")) {
+          props["RIR"] = { rich_text: [{ text: { content: rirLine } }] };
+        }
+      }
+
+      if (typeof e.note === "string" && e.note.trim() !== "")
         props["My note (exercise)"] = { rich_text: [{ text: { content: e.note } }] };
+      if (Array.isArray(e.variation))
+        props["Machine / variation"] = wMulti(e.variation);
+      if (Object.keys(props).length === 0) continue;
 
       await updatePage(e.id, props);
       written++;
