@@ -33,13 +33,14 @@ export async function GET(req: Request) {
       sorts: [{ property: "Session Date", direction: "descending" }],
     });
 
-    const last: Record<string, { weight: number | null; reps: string }> = {};
+    const last: Record<string, { weight: number | null; reps: string; rir: string }> = {};
     for (const r of history.results as any[]) {
       const name = title(r.properties["Exercise"]);
       if (name && !last[name]) {
         last[name] = {
           weight: num(r.properties["Weight (kg)"]),
           reps: txt(r.properties["Reps Done"]),
+          rir: txt(r.properties["RIR"]),
         };
       }
     }
@@ -73,6 +74,7 @@ export async function GET(req: Request) {
         cueText: roll(r.properties["Cue text"]),
         lastWeight: last[name]?.weight ?? null,
         lastReps: last[name]?.reps ?? "",
+        lastRir: last[name]?.rir ?? "",
         weight: num(r.properties["Weight (kg)"]),
         reps: txt(r.properties["Reps Done"]),
         rir: txt(r.properties["RIR"]),

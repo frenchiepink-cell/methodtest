@@ -24,6 +24,7 @@ type Ex = {
   cueText: string;
   lastWeight: number | null;
   lastReps: string;
+  lastRir: string;
   weight: number | null;
   reps: string;
   rir: string;
@@ -47,11 +48,18 @@ export default function Page() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function Row({ label, weight, reps, rir, dim }: any) {
   return (
-    <div className="flex-1 rounded-xl border border-edge bg-ink px-3 py-2">
-      <p className="text-[10px] uppercase tracking-widest text-zinc-500">{label}</p>
-      <p className="text-base font-semibold leading-tight">{value || "—"}</p>
+    <div className="flex items-baseline gap-2 text-sm">
+      <span className="w-14 shrink-0 text-[10px] uppercase tracking-widest text-zinc-500">
+        {label}
+      </span>
+      <span className={dim ? "text-zinc-400" : "font-semibold"}>
+        {weight || "—"}
+        <span className="text-zinc-600"> × </span>
+        {reps || "—"}
+        {rir ? <span className="text-zinc-500"> @ {rir}</span> : null}
+      </span>
     </div>
   );
 }
@@ -228,17 +236,27 @@ function Session() {
                 </div>
               )}
 
-              <p className="mb-2 text-sm text-zinc-500">
-                {e.lastWeight != null || e.lastReps
-                  ? `Last: ${e.lastWeight ?? "—"}kg × ${e.lastReps || "—"}`
-                  : "First time"}
-              </p>
-
-              {/* The numbers you need mid-set, out of the prose */}
-              <div className="mb-3 flex gap-2">
-                <Meta label="Target" value={e.recReps} />
-                <Meta label="Rec" value={e.recWeight != null ? `${e.recWeight}kg` : ""} />
-                <Meta label="Rest" value={e.rest} />
+              <div className="mb-3 space-y-1">
+                <Row
+                  label="Last"
+                  weight={e.lastWeight != null ? `${e.lastWeight}kg` : ""}
+                  reps={e.lastReps}
+                  rir={e.lastRir}
+                  dim
+                />
+                <Row
+                  label="Target"
+                  weight={e.recWeight != null ? `${e.recWeight}kg` : ""}
+                  reps={e.recReps}
+                />
+                {e.rest && (
+                  <div className="flex items-baseline gap-2 text-sm">
+                    <span className="w-14 shrink-0 text-[10px] uppercase tracking-widest text-zinc-500">
+                      Rest
+                    </span>
+                    <span className="text-zinc-400">{e.rest}</span>
+                  </div>
+                )}
               </div>
 
               {(e.weight != null || e.reps) && (
@@ -259,6 +277,15 @@ function Session() {
               )}
 
               <div className="mb-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-zinc-600">
+                  <span className="w-5 shrink-0" />
+                  <span className="flex-[3] text-center">kg</span>
+                  <span className="w-3 shrink-0" />
+                  <span className="flex-[2] text-center">reps</span>
+                  <span className="w-3 shrink-0" />
+                  <span className="w-14 shrink-0 text-center">rir</span>
+                  <span className="w-6 shrink-0" />
+                </div>
                 {(entries[e.id]?.sets ?? []).map((row, i) => {
                   const prev = entries[e.id]?.sets?.[i - 1]?.weight;
                   const wPlaceholder =
@@ -297,15 +324,7 @@ function Session() {
                   className="h-11 w-full rounded-xl border border-dashed border-edge text-sm text-zinc-500 active:text-zinc-300">
                   + Add set
                 </button>
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-zinc-600">
-                  <span className="w-5 shrink-0" />
-                  <span className="flex-[3] text-center">kg</span>
-                  <span className="w-3 shrink-0" />
-                  <span className="flex-[2] text-center">reps</span>
-                  <span className="w-3 shrink-0" />
-                  <span className="w-14 shrink-0 text-center">rir</span>
-                  <span className="w-6 shrink-0" />
-                </div>
+
               </div>
 
               <input value={entries[e.id]?.note ?? ""}
