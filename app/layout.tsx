@@ -4,8 +4,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "The Method",
   description: "Training log prototype",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Method",
+  },
 };
-
 export const viewport: Viewport = {
   themeColor: "#0B0B0F",
   width: "device-width",
