@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  background: #0B0B0F;
+  color: #F4F4F5;
+  -webkit-text-size-adjust: 100%;
+}
+input {
+  font-size: 16px; /* stops iOS zooming on focus */
+}
