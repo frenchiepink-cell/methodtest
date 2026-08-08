@@ -1,12 +1,13 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const MACHINES = [
   "Free weights", "Cable", "Smith", "Unilateral", "Atlantis", "Prime",
   "Prime (Prone)", "Cybex", "Nautilus", "Arsenal", "Mirafit", "Shark",
   "Glute attack", "Glutinator", "Squat press", "Reverse Pec Deck",
+  "StairMaster", "Not my usual one",
 ];
 
 type Ex = {
@@ -14,13 +15,13 @@ type Ex = {
   name: string;
   variation: string[];
   target: string;
-  recReps: string;
-  targetNote: string;
+  targetReps: string;
   recWeight: number | null;
   rest: string;
   warmup: string | null;
   markerLift: boolean;
   coachNote: string;
+  targetRir: string;
   cueText: string;
   lastWeight: number | null;
   lastReps: string;
@@ -28,17 +29,25 @@ type Ex = {
   weight: number | null;
   reps: string;
   rir: string;
+  myNote: string;
 };
 
 type SetRow = { weight: string; reps: string; rir: string };
-type Entry = { sets: SetRow[]; note: string; variation: string[] };
+type Entry = { sets: SetRow[]; note: string; variation: string[]; variationChanged: boolean };
 
-/* "10/9/9/9" or "10,9,9,9" -> ["10","9","9","9"]. Drives how many set rows
-   we open with, and the per-set rep placeholder. */
-function targetSets(recReps: string): string[] {
-  const parts = (recReps || "").split(/[\/,]/).map((x) => x.trim()).filter(Boolean);
-  return parts.length ? parts : [""];
+/* One row to start with. Weight comes prefilled with the recommendation as a
+   real value — not a grey placeholder — so it saves whether or not she retypes
+   it, and so an untouched box can never be read as 0kg. Extra sets on demand. */
+function seedEntry(e: Ex): Entry {
+  return {
+    sets: [{ weight: e.recWeight != null ? String(e.recWeight) : "", reps: "", rir: "" }],
+    note: "",
+    variation: e.variation ?? [],
+    variationChanged: false,
+  };
 }
+
+const storeKey = (date: string) => `method:session:${date || "today"}`;
 
 export default function Page() {
   return (
@@ -77,76 +86,140 @@ function Session() {
   const [openCue, setOpenCue] = useState<Record<string, boolean>>({});
   const [openMach, setOpenMach] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [restored, setRestored] = useState(false);
+  const hydrated = useRef(false);
 
   useEffect(() => {
+    let alive = true;
     fetch(`/api/session${date ? `?date=${date}` : ""}`)
       .then((r) => r.json())
       .then((j) => {
+        if (!alive) return;
         if (j.error) throw new Error(j.error);
         setDay(j.day);
         setEx(j.exercises);
+
         const seed: Record<string, Entry> = {};
-        for (const e of j.exercises as Ex[]) {
-          seed[e.id] = {
-            sets: targetSets(e.recReps).map(() => ({ weight: "", reps: "", rir: "" })),
-            note: "",
-            variation: e.variation ?? [],
-          };
+        for (const e of j.exercises as Ex[]) seed[e.id] = seedEntry(e);
+
+        /* A phone can evict a home-screen web app from memory at any point in
+           a 90-minute session. Anything typed is written to the device as it
+           is typed, so a reload resumes instead of silently starting over. */
+        try {
+          const raw = localStorage.getItem(storeKey(j.date ?? date));
+          if (raw) {
+            const prev = JSON.parse(raw) as Record<string, Entry>;
+            let any = false;
+            for (const id of Object.keys(seed)) {
+              if (prev[id]) {
+                seed[id] = { ...seed[id], ...prev[id] };
+                any = true;
+              }
+            }
+            if (any) setRestored(true);
+          }
+        } catch {
+          /* private mode or quota — carry on with a fresh session */
         }
+
         setEntries(seed);
+        hydrated.current = true;
       })
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => alive && setErr(e.message))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
   }, [date]);
 
-  const set = (id: string, k: keyof Entry, v: any) =>
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try {
+      localStorage.setItem(storeKey(date), JSON.stringify(entries));
+    } catch {
+      /* nothing we can do; the in-memory copy is still live */
+    }
+  }, [entries, date]);
+
+  const set = (id: string, k: keyof Entry, v: any) => {
+    setResult(null);
     setEntries((p) => ({ ...p, [id]: { ...p[id], [k]: v } }));
+  };
 
   const toggleMachine = (id: string, m: string) => {
     const cur = entries[id]?.variation ?? [];
-    set(id, "variation", cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]);
+    const next = cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m];
+    setResult(null);
+    setEntries((p) => ({
+      ...p,
+      [id]: { ...p[id], variation: next, variationChanged: true },
+    }));
   };
 
-  const setField = (id: string, i: number, k: keyof SetRow, v: string) =>
+  const setField = (id: string, i: number, k: keyof SetRow, v: string) => {
+    setResult(null);
     setEntries((p) => {
-      const rows = [...p[id].sets];
+      const rows = [...(p[id]?.sets ?? [])];
       rows[i] = { ...rows[i], [k]: v };
       return { ...p, [id]: { ...p[id], sets: rows } };
     });
+  };
 
+  /* A new set inherits the weight above it — the common case is another set at
+     the same load, and it keeps the "one line" default honest. */
   const addSet = (id: string) =>
-    setEntries((p) => ({ ...p, [id]: { ...p[id], sets: [...p[id].sets, { weight: "", reps: "", rir: "" }] } }));
+    setEntries((p) => {
+      const rows = p[id]?.sets ?? [];
+      const prev = rows[rows.length - 1];
+      return {
+        ...p,
+        [id]: { ...p[id], sets: [...rows, { weight: prev?.weight ?? "", reps: "", rir: "" }] },
+      };
+    });
 
   const removeSet = (id: string, i: number) =>
     setEntries((p) => ({
       ...p,
-      [id]: { ...p[id], sets: p[id].sets.filter((_, j) => j !== i) },
+      [id]: { ...p[id], sets: (p[id]?.sets ?? []).filter((_, j) => j !== i) },
     }));
 
+  /* Reps are what make a set real. The weight is prefilled, so weight alone
+     would mark every card done the moment the screen loaded. */
   const isDone = (id: string) =>
-    (entries[id]?.sets ?? []).some((s) => s.weight.trim() && s.reps.trim());
+    (entries[id]?.sets ?? []).some((s) => s.reps.trim() !== "");
   const doneCount = ex.filter((e) => isDone(e.id)).length;
 
-  /* Held locally until Finish — gyms have bad signal and a failed write
-     must never wipe what was typed. */
-  async function finish() {
+  const finish = useCallback(async () => {
     setSaving(true);
     setErr(null);
+    setResult(null);
     try {
-      const payload = ex.map((e) => ({ id: e.id, ...entries[e.id] }));
+      const payload = ex.map((e) => ({
+        id: e.id,
+        name: e.name,
+        ...(entries[e.id] ?? seedEntry(e)),
+      }));
       const res = await fetch("/api/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entries: payload }),
+        body: JSON.stringify({ date, entries: payload }),
       });
       const j = await res.json();
       if (j.error) throw new Error(j.error);
-      router.push("/");
+      setResult(j);
+      if (j.ok) {
+        try {
+          localStorage.removeItem(storeKey(date));
+        } catch {}
+        router.push("/");
+      }
     } catch (e: any) {
       setErr(e.message);
+    } finally {
       setSaving(false);
     }
-  }
+  }, [ex, entries, date, router]);
 
   if (loading) return <p className="p-6 text-zinc-500">Loading…</p>;
 
@@ -163,18 +236,60 @@ function Session() {
       <header className="sticky top-0 z-10 flex items-center justify-between border-b border-edge bg-ink/95 px-5 py-4 backdrop-blur">
         <div>
           <p className="text-sm font-semibold leading-tight">{day}</p>
-          <p className="text-xs text-zinc-500">{doneCount} / {ex.length} done</p>
+          <p className="text-xs text-zinc-500">{doneCount} / {ex.length} logged</p>
         </div>
-        <button onClick={finish} disabled={saving}
-          className="rounded-xl bg-accent px-5 py-3 text-base font-semibold active:opacity-80 disabled:opacity-50">
+        <button onClick={finish} disabled={saving || doneCount === 0}
+          className="rounded-xl bg-accent px-5 py-3 text-base font-semibold active:opacity-80 disabled:opacity-40">
           {saving ? "Saving…" : "Finish"}
         </button>
       </header>
 
+      {restored && (
+        <p className="mx-4 mt-4 rounded-xl border border-emerald-900 bg-emerald-950/40 p-3 text-sm text-emerald-300">
+          Picked up where you left off — nothing you typed was lost.
+        </p>
+      )}
+
+      {doneCount === 0 && (
+        <p className="mx-4 mt-4 rounded-xl border border-edge bg-card p-3 text-sm text-zinc-400">
+          Enter reps on at least one exercise. Finish stays disabled until then —
+          it can no longer report a save that wrote nothing.
+        </p>
+      )}
+
       {err && (
-        <p className="m-5 rounded-xl border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
+        <p className="m-4 rounded-xl border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
           {err} — your entries are still here, press Finish to retry.
         </p>
+      )}
+
+      {result && !result.ok && (
+        <div className="m-4 rounded-xl border border-amber-800 bg-amber-950/40 p-3 text-sm text-amber-200">
+          <p className="mb-2 font-semibold">Not everything saved — nothing has been cleared.</p>
+          {result.failed?.length > 0 && (
+            <p className="mb-1">
+              Rejected by Notion: {result.failed.map((f: any) => `${f.name} (${f.error})`).join(", ")}
+            </p>
+          )}
+          {result.verified?.filter((v: any) => !v.present || (!v.reps && v.weight == null)).length > 0 && (
+            <p className="mb-1">
+              Sent but not found on read-back:{" "}
+              {result.verified
+                .filter((v: any) => !v.present || (!v.reps && v.weight == null))
+                .map((v: any) => v.name)
+                .join(", ")}
+            </p>
+          )}
+          {result.dropped?.length > 0 && (
+            <p className="mb-1">
+              These fields no longer exist in Notion and were not written:{" "}
+              <strong>{result.dropped.join(", ")}</strong>. Someone renamed them — everything
+              else saved.
+            </p>
+          )}
+          {result.verifyError && <p className="mb-1">Could not verify: {result.verifyError}</p>}
+          <p>Press Finish to retry.</p>
+        </div>
       )}
 
       <div className="space-y-3 p-4">
@@ -247,7 +362,8 @@ function Session() {
                 <Row
                   label="Target"
                   weight={e.recWeight != null ? `${e.recWeight}kg` : ""}
-                  reps={e.recReps}
+                  reps={e.targetReps}
+                  rir={e.targetRir}
                 />
                 {e.rest && (
                   <div className="flex items-baseline gap-2 text-sm">
@@ -266,8 +382,9 @@ function Session() {
                 </p>
               )}
 
-              {e.targetNote && (
-                <p className="mb-3 text-sm leading-snug text-zinc-400">{e.targetNote}</p>
+              {/* The coach's prose, shown whole — no longer split on punctuation. */}
+              {e.target && (
+                <p className="mb-3 text-sm leading-snug text-zinc-400">{e.target}</p>
               )}
 
               {e.coachNote && (
@@ -287,26 +404,18 @@ function Session() {
                   <span className="w-6 shrink-0" />
                 </div>
                 {(entries[e.id]?.sets ?? []).map((row, i) => {
-                  const prev = entries[e.id]?.sets?.[i - 1]?.weight;
-                  const wPlaceholder =
-                    prev && prev.trim() !== ""
-                      ? prev
-                      : e.recWeight != null
-                      ? String(e.recWeight)
-                      : "";
                   const prevRir = entries[e.id]?.sets?.[i - 1]?.rir;
                   return (
                     <div key={i} className="flex items-center gap-1.5">
                       <span className="w-5 shrink-0 text-xs text-zinc-500">{i + 1}</span>
                       <input type="text" inputMode="decimal"
                         value={row.weight}
-                        placeholder={wPlaceholder}
                         onChange={(ev) => setField(e.id, i, "weight", ev.target.value.replace(",", "."))}
                         className="h-14 min-w-0 flex-[3] rounded-xl border border-edge bg-ink px-2 text-center text-lg tabular-nums outline-none placeholder:text-zinc-600 focus:border-accent" />
                       <span className="shrink-0 text-sm text-zinc-600">×</span>
                       <input type="text" inputMode="numeric"
                         value={row.reps}
-                        placeholder={targetSets(e.recReps)[i] ?? ""}
+                        placeholder={e.targetReps ? e.targetReps.split(/[\/,]/)[i]?.trim() ?? "" : ""}
                         onChange={(ev) => setField(e.id, i, "reps", ev.target.value)}
                         className="h-14 min-w-0 flex-[2] rounded-xl border border-edge bg-ink px-2 text-center text-lg tabular-nums outline-none placeholder:text-zinc-600 focus:border-accent" />
                       <span className="shrink-0 text-sm text-zinc-600">@</span>
@@ -324,7 +433,6 @@ function Session() {
                   className="h-11 w-full rounded-xl border border-dashed border-edge text-sm text-zinc-500 active:text-zinc-300">
                   + Add set
                 </button>
-
               </div>
 
               <input value={entries[e.id]?.note ?? ""}

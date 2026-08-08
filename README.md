@@ -32,6 +32,7 @@ Easiest route, no local setup:
    | `NOTION_TRAINING_DB` | `2b11a9968e944d13bb7e929033fb0c48` |
    | `NOTION_DAILY_DB` | `d3278e1f5516496db0074daaf928a978` |
    | `NOTION_CUE_DB` | `ce69873a3dbc444ab38e394da3745af3` |
+   | `APP_TIMEZONE` | `Europe/London` |
 
 5. Deploy. Open the URL on your phone and **Add to Home Screen** — it then opens
    full-screen like an app.
@@ -46,9 +47,28 @@ then `npm install && npm run dev`.
   row exists for today it creates one; otherwise it updates.
 - **Log Session** lists today's exercises in `Order`, showing last time's weight and reps,
   the target, the rec weight, the coach note, and the cue behind a toggle.
-- **Nothing is written until you press Finish.** Everything is held in the browser.
-  If the write fails, your entries stay on screen and you can retry.
-- Writes go back to `Weight (kg)`, `Reps Done` and `My note (exercise)`.
+- **One set row per exercise**, with the weight box **prefilled from `Rec weight (kg)`
+  as a real value**. Overwrite it with what you actually lifted. `+ Add set` for more;
+  a new row inherits the weight above it.
+- **Reps are what make a set count.** A prefilled weight with no reps is not a logged
+  set and is never written — so an exercise you skipped stays untouched in Notion.
+- **Nothing is written until you press Finish**, but everything you type is saved to the
+  phone as you type it. If the app is evicted from memory mid-session, reopening it
+  resumes where you left off.
+- **Finish verifies.** After writing, the app reads the rows back out of Notion and only
+  reports success for rows it can actually see. It cannot report a save that wrote nothing.
+
+## 3a. Field ownership
+
+The app writes only what Vee performed:
+`Weight (kg)` · `Reps Done` · `RIR` · `My note (exercise)` · `Machine / variation`
+
+Everything else on the row belongs to Coach 2.0 and is read-only here:
+`Target` · `Target reps` · `Rec weight (kg)` · `Coach note (exercise)` · `Rest` ·
+`Warm-up` · `Marker Lift` · `Order` · `Day` · `Session Date` · `Plan`
+
+`Target` is prose and is displayed whole — it is never parsed. Set-row counts come from
+`Target reps`, never from punctuation in `Target`.
 
 ## 4. Deliberate limits
 

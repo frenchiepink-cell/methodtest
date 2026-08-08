@@ -1,7 +1,17 @@
 const TOKEN = process.env.NOTION_TOKEN!;
 const VERSION = "2022-06-28";
 
-async function notion(path: string, init?: RequestInit) {
+/* The athlete's wall-clock zone. Vercel runs the server in UTC, so this can
+   never be derived from the server's own clock — see localDate() below. */
+const TZ = process.env.APP_TIMEZONE || "Europe/London";
+
+export class NotionError extends Error {
+  constructor(public status: number, public detail: string) {
+    super(`Notion ${status}: ${detail}`);
+  }
+}
+
+async function notion(path: string, init?: RequestInit, attempt = 0): Promise<any> {
   const res = await fetch(`https://api.notion.com/v1${path}`, {
     ...init,
     headers: {
@@ -11,9 +21,35 @@ async function notion(path: string, init?: RequestInit) {
     },
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+
+  /* Notion rate-limits at ~3 req/sec and answers 429 with Retry-After. */
+  if (res.status === 429 && attempt < 3) {
+    const wait = Number(res.headers.get("Retry-After") || 1) * 1000;
+    await new Promise((r) => setTimeout(r, wait));
+    return notion(path, init, attempt + 1);
+  }
+
+  if (!res.ok) throw new NotionError(res.status, await res.text());
   return res.json();
 }
+
+/* The live property list. Notion rejects an entire PATCH if it mentions one
+   unknown property, so a single rename upstream would fail every row in a
+   session. Fetch the schema and drop unknown keys instead — a renamed field
+   then costs one field, visibly, rather than the whole write silently. */
+export const databaseProps = async (db: string): Promise<Set<string>> => {
+  const d = await notion(`/databases/${db}`);
+  return new Set(Object.keys(d?.properties ?? {}));
+};
+
+/* Property names Coach 2.0 has renamed, newest first. The app follows the
+   rename rather than breaking; add to the front when it happens again. */
+export const ALIASES: Record<string, string[]> = {
+  athleteNote: ["Athlete's note (exercise)", "Athlete note (exercise)", "My note (exercise)"],
+};
+
+export const pickName = (known: Set<string>, candidates: string[]): string | null =>
+  candidates.find((c) => known.has(c)) ?? null;
 
 export const queryDb = (db: string, body: unknown) =>
   notion(`/databases/${db}/query`, { method: "POST", body: JSON.stringify(body) });
@@ -70,13 +106,46 @@ export const wMulti = (v: any) => ({
 });
 export const wDate = (v: any) => (has(v) ? { date: { start: v } } : { date: null });
 
-/* Local date, not UTC — a 23:30 session must not land on tomorrow. */
+/* "" -> null, not 0. Number("") is 0 and Number.isFinite(0) is true, which is
+   how an untouched weight box used to land in Notion as a logged 0kg lift. */
+export const toNum = (v: any): number | null => {
+  const s = String(v ?? "").trim();
+  if (s === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+};
+
+/* ---------- per-set formatting ----------
+   House separator for anything recorded per set. Target reps, RIR and every
+   hand-typed row use "/", so a set's target, result and RIR line up position
+   by position. Reading stays tolerant of the commas the app emitted before
+   8 Aug 2026, so older rows still parse. */
+export const SEP = "/";
+export const splitSets = (s: string): string[] =>
+  (s || "").split(/[\/,]/).map((x) => x.trim()).filter(Boolean);
+
+/* ---------- dates ----------
+   Must not use getTimezoneOffset(): on Vercel the server clock is UTC, so the
+   old version made today() disagree with the phone between 00:00 and 01:00 BST.
+   Intl pins it to the athlete's zone on both server and client. */
 export function localDate(d = new Date()): string {
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 }
 export const today = () => localDate();
-export const shiftDate = (iso: string, days: number) =>
-  localDate(new Date(new Date(iso + "T12:00:00").getTime() + days * 86400000));
+
+/* Pure string arithmetic — no Date-in-local-zone round trip to get wrong. */
+export const shiftDate = (iso: string, days: number): string => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + days * 86400000);
+  return [
+    t.getUTCFullYear(),
+    String(t.getUTCMonth() + 1).padStart(2, "0"),
+    String(t.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+};
 export const daysBefore = (iso: string, n: number) => shiftDate(iso, -n);
